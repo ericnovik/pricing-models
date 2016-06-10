@@ -8,7 +8,8 @@ source('hir_data_sim.R')
 
 dat_myst <- readRDS('data_2016-04-08 12:24:30_low_vol_Mystery.rds')
 dat_myst <- arrange(dat_myst,prod_key,year,week)
-dat_myst <- dat_myst %>% mutate(year_month = interaction(factor(year),factor(month),drop=T))
+dat_myst <- dat_myst %>% mutate(year_month = interaction(factor(year),factor(month),drop=T),
+                                promote = price <= 3.99)
 dat_myst$year_month_ind <- dat_myst %>% group_indices(year_month)
 dat_myst$dsd <- dat_myst$ysd * 365
 dat_myst$dsd_mod <- round(dat_myst$dsd,0)
@@ -29,7 +30,8 @@ data_clean <- function(df) {
     mutate(run_median = TTR::runMedian(w_qty_sld, cumulative = TRUE,n=1),
            run_mad = TTR::runMAD(w_qty_sld,cumulative=TRUE,n=1),
            run_z = (w_qty_sld - run_median) / (1.4826 * run_mad),
-           outlier = ifelse(ifelse(is.na(run_z),0,run_z) > 3, 1, 0))
+           outlier = ifelse(ifelse(is.na(run_z),0,run_z) > 3, 1, 0),
+           L1_qty = c(-999,head(w_qty_sld,-1)))
   df_clean <- arrange(df_clean,prod_key_stan,year,week)
   df_clean$y_obs_num <- as.vector(unlist(sapply(1:length(unique(df_clean$prod_key_stan)),
                                      function(x) 1:sum(df_clean$prod_key_stan == x))))
@@ -42,7 +44,9 @@ data_clean <- function(df) {
                          prod_key = prod_key_stan,
                          outlier = outlier,
                          year_month_ind = year_month_ind,
-                         num_outlier = sum(outlier)))
+                         num_outlier = sum(outlier),
+                         promote = promote,
+                         L1_qty = L1_qty))
   return(list(stan_data = stan_data,
               df_clean = df_clean))
 }
@@ -70,6 +74,9 @@ mnth_mod <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = big_stan,
                              chains = 2, cores = 2, iter = 500, warmup = 300)
 
 mnth_mod_small <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = small_stan, 
+                             chains = 2, cores = 2, iter = 500, warmup = 300)
+
+mnth_mod_ar_big <- stan('neg_bin_hier_outliers_ar.stan', data = big_stan, 
                              chains = 2, cores = 2, iter = 500, warmup = 300)
 
 fit_hier_nl_no_first <- stan('neg_bin_hier_outlier_nl.stan', data = big_stan, 
@@ -157,7 +164,6 @@ pp_means_by_gp_by_x <- function(y, y_rep, gp, x) {
   print(p)
 }
 
-pp_means_by_gp_by_x(y = big_stan$qty, gp = big_stan$prod_key, y_rep = pp, x = rep(1:60,30))
                     
 
 pp_means_by_group <- function(y_rep, data) {
@@ -202,7 +208,9 @@ plt_mean_v_data <- function(df_plt) {
 }
 
 pp <- pp_fit(fit_hier_nl_no_first)
-pp <- t(pp_fit(mnth_mod))
+pp <- t(pp_fit(mnth_mod_small))
+pp <- t(pp_fit(mnth_mod_ar_big))
+pp_means_by_gp_by_x(y = big_stan$qty, gp = big_stan$prod_key, y_rep = pp, x = rep(1:60,30))
 pp <- pp_fit_pois(fit_hier_pois)
 id_y <- pp_means_by_group(pp, big_stan)
 p
