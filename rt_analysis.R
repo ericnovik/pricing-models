@@ -3,71 +3,77 @@ library(ggplot2)
 library(rstan)
 library(dplyr)
 library(reshape2)
+library(TTR)
 source('hir_data_sim.R')
 
 dat_myst <- readRDS('data_2016-04-08 12:24:30_low_vol_Mystery.rds')
 dat_myst <- arrange(dat_myst,prod_key,year,week)
+dat_myst <- dat_myst %>% mutate(year_month = interaction(factor(year),factor(month),drop=T))
+dat_myst$year_month_ind <- dat_myst %>% group_indices(year_month)
+dat_myst$dsd <- dat_myst$ysd * 365
+dat_myst$dsd_mod <- round(dat_myst$dsd,0)
+dat_myst[dat_myst$year == 2016,]$dsd_mod <- dat_myst[dat_myst$year == 2016,]$dsd_mod - 1L
+dat_myst$wsd <- floor(dat_myst$dsd_mod / 7)
 
+gpd_dat <- group_by(dat_myst,prod_key)
+small_timers <- filter(gpd_dat, mean(w_qty_sld) <= 20 & !any(wsd < 100))
+big_timers <- filter(gpd_dat,  mean(w_qty_sld) > 20 & !any(wsd < 100))
 
-plot_ysd_price <- function(prod_key, dat) {
-  return(plot(dat[dat$prod_key == prod_key,'ysd'],
-              dat[dat$prod_key == prod_key,'price']))
+ggplot(data = small_timers,aes(x=wsd,y=w_qty_sld,colour = prod_key_factor )) + geom_point() + geom_line() 
+ggplot(data = big_timers,aes(x=wsd,y=w_qty_sld,colour = prod_key_factor )) + geom_point() + geom_line() 
+
+data_clean <- function(df) {
+  gpd <- group_by(df, prod_key)
+  gpd$prod_key_stan <- as.integer(factor(gpd$prod_key))
+  df_clean <- gpd %>% arrange(prod_key,year,week) %>% 
+    mutate(run_median = TTR::runMedian(w_qty_sld, cumulative = TRUE,n=1),
+           run_mad = TTR::runMAD(w_qty_sld,cumulative=TRUE,n=1),
+           run_z = (w_qty_sld - run_median) / (1.4826 * run_mad),
+           outlier = ifelse(ifelse(is.na(run_z),0,run_z) > 3, 1, 0))
+  df_clean <- arrange(df_clean,prod_key_stan,year,week)
+  df_clean$y_obs_num <- as.vector(unlist(sapply(1:length(unique(df_clean$prod_key_stan)),
+                                     function(x) 1:sum(df_clean$prod_key_stan == x))))
+  stan_data <- with(df_clean,
+                    list(N = length(prod_key),
+                         qty = w_qty_sld,
+                         time = ysd,
+                         price = price,
+                         J = length(unique(prod_key)),
+                         prod_key = prod_key_stan,
+                         outlier = outlier,
+                         year_month_ind = year_month_ind,
+                         num_outlier = sum(outlier)))
+  return(list(stan_data = stan_data,
+              df_clean = df_clean))
 }
 
-plot_price_qty <- function(prod_key, dat) {
-  return(plot(dat[dat$prod_key == prod_key,'price'],
-              log(dat[dat$prod_key == prod_key,'w_qty_sld'])))
-}
+small_clean <- data_clean(small_timers)
+small_stan <- small_clean$stan_data
+small_stan$prior_global_mean = 2
+small_stan$prior_global_sd = 1
 
-plot_ysd_qty <- function(prod_key=NULL, dat, plog=TRUE,...) {
-  if (!is.null(prod_key)) {
-    dat_plt <- filter(dat,prod_key == prod_key)
-  } else {
-    dat_plt <- dat
-  }
-  qty <- dat_plt$w_qty_sld
-  ysd <- dat_plt$ysd
-  if (plog) {
-    qty <- ifelse(qty == 0, log(0.5), log(qty))
-  }
-  return(plot(as.data.frame(ysd)[,1],
-              as.data.frame(qty)[,1], ...))
-}
-
-plot_qty_acf <- function(prod_key=NULL, dat, plog=TRUE,...) {
-  if (!is.null(prod_key)) {
-    dat_plt <- filter(dat,prod_key == prod_key)
-  } else {
-    dat_plt <- dat
-  }
-  qty <- dat_plt$w_qty_sld
-  ysd <- dat_plt$ysd
-  if (plog) {
-    qty <- ifelse(qty == 0, log(0.5), log(qty))
-  }
-  return(pacf(as.data.frame(qty)[,1], ...))
-}
-
-dat_sub <- filter(group_by(dat_myst,prod_key), w_qty_sld[1] > 20)
-dat_sub$prod_key_stan <- as.integer(factor(dat_sub$prod_key))
-dat_sub <- arrange(dat_sub,prod_key_stan,year,week)
-dat_sub$y_obs_num <- unlist(sapply(1:length(unique(dat_sub$prod_key_stan)),
-                                   function(x) 1:sum(dat_sub$prod_key_stan == x)))
-dat_sub <- dat_sub[dat_sub$y_obs_num != 1,]
-data_real <- with(dat_sub,
-                  list(N = length(prod_key),
-                       qty = w_qty_sld,
-                       time = ysd,
-                       price = price,
-                       J = length(unique(prod_key)),
-                       prod_key = prod_key_stan))
-
+big_clean <- data_clean(big_timers)
+big_stan <- big_clean$stan_data
+big_stan$prior_global_mean = 5
+big_stan$prior_global_sd = 1
 #test_fit <- stan('neg_bin_rd_gp_var_nohier.stan', data = data_real, chains = 2, cores = 2, iter = 400, warmup = 300)
 #fit_hier <- stan('neg_bin_hier.stan', data = data_real, chains = 2, cores = 2, iter = 400, warmup = 300)
 #fit_hier_nl <- stan('neg_bin_hier_nl.stan', data = data_real, chains = 2, cores = 2, iter = 400, warmup = 300)
-fit_hier_nl_no_first <- stan('neg_bin_hier_nl.stan', data = data_real, chains = 2, cores = 2, iter = 2000, warmup = 1500,control=list(adapt_delta=0.9))
-fit_hier_ <- stan('poisson_hier_nl.stan', data = data_real, chains = 2, cores = 1, iter = 2000, warmup = 1500,control=list(adapt_delta=0.9, max_treedepth=13))
+#fit_hier_nl_no_first <- stan('neg_bin_hier_outlier_nl.stan', data = data_real, chains = 2, cores = 2, iter = 2000, warmup = 1500,control=list(adapt_delta=0.9))
+fit_hier_nl_no_first <- stan('neg_bin_hier_outlier_nl.stan', data = big_stan, 
+                             chains = 2, cores = 2, iter = 500, warmup = 300)
 
+mnth_mod <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = big_stan, 
+                             chains = 2, cores = 2, iter = 500, warmup = 300)
+
+mnth_mod <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = big_stan, 
+                             chains = 2, cores = 2, iter = 500, warmup = 300)
+
+mnth_mod_small <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = small_stan, 
+                             chains = 2, cores = 2, iter = 500, warmup = 300)
+
+fit_hier_nl_no_first <- stan('neg_bin_hier_outlier_nl.stan', data = big_stan, 
+                             chains = 2, cores = 2, iter = 2000, warmup = 1500)
 pp_gen <- function(loc, scale=NULL) {
   stopifnot(all(dim(loc) == dim(scale)))
   n_gen <- dim(loc)[1]
@@ -97,7 +103,9 @@ pp_fit <- function(stan_fit) {
 }
 
 pp_fit_pois <- function(stan_fit) {
-  post_loc <- 
+  post_loc <- rstan::extract(stan_fit,pars=c('etas'))[[1]]
+  reps <- pp_gen(post_loc)
+  return(reps)
 }
 
 y_rep_gp <- function(stan_fit, data) {
@@ -117,15 +125,51 @@ log_fun <- function(x) {
   return(x_filt)
 }
 
+#
+# @param y,yrep,group Validated y, yrep, and group objects from the user.
+# @param stat Either NULL or a string naming a function.
+# @value If \code{stat} is NULL, a molten data frame grouped by group and
+#   variable. If \code{stat} specifies a function then a summary table created
+#   by dplyr::summarise.
+#
+
+pp_means_by_gp_by_x <- function(y, y_rep, gp, x) {
+  lower_25 <- apply(y_rep,2,quantile,0.05)
+  median <- apply(y_rep,2,quantile,0.5)
+  upper_75 <- apply(y_rep,2,quantile,0.95)
+  df <- data.frame(
+    lower_25 = lower_25,
+    y = median,
+    upper_75 = upper_75,
+    gp = gp,
+    x = x)
+  df_data <- data.frame(y = y,
+                       x = x,
+                       gp = gp)
+  p <- ggplot(data = df, aes(x = x, y = y, ymin = lower_25,
+                             ymax = upper_75)) + 
+    geom_smooth(stat = "identity",
+                fill = "#DCBCBC",
+                color = "#C79999") + 
+    
+    geom_point(data = df_data, color = 'black', size = 0.25) +
+    facet_wrap(facets = "gp", scales = "free_y")
+  print(p)
+}
+
+pp_means_by_gp_by_x(y = big_stan$qty, gp = big_stan$prod_key, y_rep = pp, x = rep(1:60,30))
+                    
+
 pp_means_by_group <- function(y_rep, data) {
   gpd_y <- group_by(data.frame(y = data$qty,
                                prod_key = data$prod_key,
-                               y_obs_num = unlist(sapply(1:max(data$prod_key),
-                                              function(x) 1:sum(data$prod_key == x)))),prod_key)
-  means <- summarise(gpd_y, mean(y))
-  means <- dplyr::rename(means, obs_mean=`mean(y)`)
+                               y_obs_num = as.vector(unlist(sapply(1:max(data$prod_key),
+                                              function(x) 1:sum(data$prod_key == x))))),prod_key)
   gpd_y_rep <- data.frame(cbind(y_rep,data$prod_key,gpd_y$y_obs_num))
   names(gpd_y_rep) <- c(paste('y_rep_',1:dim(y_rep)[2],sep=''),'prod_key','y_obs_num')
+  gpd_y_rep <- filter(gpd_y_rep, y_obs_num >= 40)
+  means <- summarise(gpd_y_rep, mean(y))
+  means <- dplyr::rename(means, obs_mean=`mean(y)`)
   melted <- melt(gpd_y_rep, id.vars = c('prod_key','y_obs_num'))
   gpd_key_rep <- group_by(melted, prod_key, variable)
   gpd_key_obs <- group_by(melted, prod_key, y_obs_num)
@@ -157,8 +201,11 @@ plt_mean_v_data <- function(df_plt) {
   return(plt)
 }
 
-pp <- pp_fit(fit_hier_gp_no_first)
-id_y <- pp_means_by_group(pp, data_real)
+pp <- pp_fit(fit_hier_nl_no_first)
+pp <- t(pp_fit(mnth_mod))
+pp <- pp_fit_pois(fit_hier_pois)
+id_y <- pp_means_by_group(pp, big_stan)
+p
 
 plt_mean_v_data(id_y$jnd_indiv)
 plt_dens_means(id_y$jnd)
