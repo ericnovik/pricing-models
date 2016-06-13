@@ -55,11 +55,15 @@ small_clean <- data_clean(small_timers)
 small_stan <- small_clean$stan_data
 small_stan$prior_global_mean = 2
 small_stan$prior_global_sd = 1
+small_stan$prior_global_alpha_sd = 0
+small_stan$prior_global_alpha_sd_sd = 1
 
 big_clean <- data_clean(big_timers)
 big_stan <- big_clean$stan_data
 big_stan$prior_global_mean = 5
 big_stan$prior_global_sd = 1
+big_stan$prior_global_alpha_sd = 2
+big_stan$prior_global_alpha_sd_sd = 1
 #test_fit <- stan('neg_bin_rd_gp_var_nohier.stan', data = data_real, chains = 2, cores = 2, iter = 400, warmup = 300)
 #fit_hier <- stan('neg_bin_hier.stan', data = data_real, chains = 2, cores = 2, iter = 400, warmup = 300)
 #fit_hier_nl <- stan('neg_bin_hier_nl.stan', data = data_real, chains = 2, cores = 2, iter = 400, warmup = 300)
@@ -73,11 +77,14 @@ mnth_mod <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = big_stan,
 mnth_mod <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = big_stan, 
                              chains = 2, cores = 2, iter = 500, warmup = 300)
 
-mnth_mod_small <- stan('neg_bin_hier_outlier_nl_gp_var.stan', data = small_stan, 
-                             chains = 2, cores = 2, iter = 500, warmup = 300)
+mnth_mod_small <- stan('neg_bin_hier_outliers_ar.stan', data = small_stan, 
+                             chains = 4, cores = 2, iter = 1000, warmup = 700)
 
 mnth_mod_ar_big <- stan('neg_bin_hier_outliers_ar.stan', data = big_stan, 
-                             chains = 2, cores = 2, iter = 500, warmup = 300)
+                             chains = 4, cores = 2, iter = 1000, warmup = 700)
+
+mnth_mod_ar_big_ar <- stan('neg_bin_hier_outliers_ar_mo.stan', data = big_stan, 
+                             chains = 4, cores = 2, iter = 1000, warmup = 700)
 
 fit_hier_nl_no_first <- stan('neg_bin_hier_outlier_nl.stan', data = big_stan, 
                              chains = 2, cores = 2, iter = 2000, warmup = 1500)
@@ -210,7 +217,9 @@ plt_mean_v_data <- function(df_plt) {
 pp <- pp_fit(fit_hier_nl_no_first)
 pp <- t(pp_fit(mnth_mod_small))
 pp <- t(pp_fit(mnth_mod_ar_big))
-pp_means_by_gp_by_x(y = big_stan$qty, gp = big_stan$prod_key, y_rep = pp, x = rep(1:60,30))
+pp_small <- t(pp_fit(mnth_mod_small))
+pp_means_by_gp_by_x(y = small_stan$qty, gp = small_stan$prod_key, y_rep = pp_small, x = rep(1:60,118))
+pp_means_by_gp_by_x(y =big_stan$qty, gp = big_stan$prod_key, y_rep = pp, x = rep(1:60,30))
 pp <- pp_fit_pois(fit_hier_pois)
 id_y <- pp_means_by_group(pp, big_stan)
 p

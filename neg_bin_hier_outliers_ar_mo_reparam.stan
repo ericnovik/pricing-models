@@ -44,22 +44,41 @@ parameters {
   vector[J] beta_ar_raw;
   real<lower=0> phi;  
   vector<lower=0>[num_outlier] outlier_effects;
-  real<lower=0> month_sd;
+  real<lower=0,upper=1> month_ar_raw;
   vector[14] month_raw;
+  real<lower=0> ar_sd;
 }
 transformed parameters {
   vector[J] alpha_prod;
   vector[J] beta_time; 
   vector[J] beta_price;
   vector[J] beta_ar;
+  real month_ar;
   vector[14] month;
   vector[N] etas;     
+  real alpha_sq;
 
+  month_ar <- 2 * month_ar_raw - 1;
   alpha_prod <- sigma_alpha_prod * alpha_prod_raw;
-  month <- month_sd * month_raw;
+  alpha_sq <- ar_sd / (1.0 - pow(month_ar,2.0));
+  
   beta_time <- mu_beta_time + sigma_beta_time * beta_time_raw;
   beta_price <- mu_beta_price + sigma_beta_price * beta_price_raw;
   beta_ar <- mu_beta_ar + sigma_beta_ar * beta_ar_raw;
+  {
+    matrix[14,14] month_cov;
+    matrix[14,14] L_month_cov;
+    for (n in 1:13) {
+      for (m in (n+1):14) {
+        month_cov[n, m] <- pow(month_ar,m-n) * alpha_sq;
+        month_cov[m, n] <- month_cov[n, m];
+      }
+      month_cov[n, n] <- alpha_sq;
+    }
+    month_cov[14, 14] <- alpha_sq;
+    L_month_cov <- cholesky_decompose(month_cov);
+    month <- L_month_cov * month_raw;
+  }
 
   {
     int outlier_counter;
@@ -96,7 +115,8 @@ model {
   sigma_beta_time ~ normal(0, 1);
   sigma_beta_price ~ normal(0, 1);
   sigma_beta_ar ~ normal(0, 1);
-  month_sd ~ normal(0, 1);
+  month_ar_raw ~ beta(4, 2);
+  ar_sd ~ normal(0, 1);
 
   mu_beta_price ~ normal(-1, 1);
   mu_beta_time ~ normal(-1, 1);
